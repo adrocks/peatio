@@ -26,6 +26,11 @@ class Trade < ApplicationRecord
 
   # == Callbacks ============================================================
 
+  after_validation(on: :create) do
+    # Set taker type before creation
+    self.taker_type = taker_order&.side
+  end
+
   after_commit on: :create do
     EventAPI.notify ['market', market_id, 'trade_completed'].join('.'), \
       Serializers::EventAPI::TradeCompleted.call(self)
@@ -53,8 +58,31 @@ class Trade < ApplicationRecord
     end
 
     def from_influx(params)
-      Peatio::InfluxDB.client.query("select id, price, amount, total, taker_type, market, time as created_at from trades where market='#{params['market']}' order by #{params['order_by']} limit #{params['limit']}") do |_name, _tags, points|
+      params.stringify_keys!
+      Peatio::InfluxDB.client.query("select id, price, amount, total, taker_type, market, created_at from trades where market='#{params['market']}' order by #{params['order_by']} limit #{params['limit']}") do |_name, _tags, points|
         return points.map(&:deep_symbolize_keys!)
+      end
+    end
+
+    def from_influx_initialize_market_ticker(params)
+      params.stringify_keys!
+      Peatio::InfluxDB.client.query("select min(price), max(price), first(price), last(price), time as created_at from trades where market='#{params['market']}' and time > now() - 24h") do |_name, _tags, points|
+        return points.map(&:deep_symbolize_keys!).first
+      end
+    end
+
+    def from_influx_24h_volume(params)
+      params.stringify_keys!
+      Peatio::InfluxDB.client.query("select SUM(total) as volume from trades where market='#{params['market']}' and time > now() - 24h") do |_name, _tags, points|
+        return points.map(&:deep_symbolize_keys!).first
+      end
+    end
+
+    # Average 24 hours price calculated using VWAP ratio.
+    def from_influx_vwap(params)
+      params.stringify_keys!
+      Peatio::InfluxDB.client.query("select sum(volume) / sum(amount) as vwap from (select amount, price * amount as volume from trades where market='#{params['market']}' and time > now() - 24h)") do |_name, _tags, points|
+        return points.map(&:deep_symbolize_keys!).first
       end
     end
   end
@@ -108,8 +136,9 @@ class Trade < ApplicationRecord
   end
 
   def for_global
+    t_type = taker_type.present? ? taker_type : taker_order.side
     { tid:        id,
-      taker_type: taker_order.side,
+      taker_type: t_type,
       date:       created_at.to_i,
       price:      price.to_s || ZERO,
       amount:     amount.to_s || ZERO }
@@ -134,17 +163,19 @@ class Trade < ApplicationRecord
   end
 
   def influx_data
+    t_type = taker_type.present? ? taker_type : taker_order.side
     { values:     { id:         id,
                     price:      price,
                     amount:     amount,
                     total:      total,
-                    taker_type: taker_order.side },
-      tags:       { market: market.id },
-      timestamp:  created_at.to_i }
+                    taker_type: t_type,
+                    created_at: created_at.to_i },
+      tags:       { market: market.id }
+    }
   end
 
   def write_to_influx
-    Peatio::InfluxDB.client.write_point(self.class.table_name, influx_data, "s")
+    Peatio::InfluxDB.client.write_point(self.class.table_name, influx_data, "ns")
   end
 
   private
@@ -305,7 +336,7 @@ class Trade < ApplicationRecord
 end
 
 # == Schema Information
-# Schema version: 20190813121822
+# Schema version: 20200228093038
 #
 # Table name: trades
 #
@@ -318,6 +349,7 @@ end
 #  market_id      :string(20)       not null
 #  maker_id       :integer          not null
 #  taker_id       :integer          not null
+#  taker_type     :string(20)
 #  created_at     :datetime         not null
 #  updated_at     :datetime         not null
 #

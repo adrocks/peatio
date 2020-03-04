@@ -77,7 +77,13 @@ class Global
 
   def h24_volume
     cache_fetch(:h24_volume) do
-      Trade.where(market_id: market_id).h24.sum(:amount) || ZERO
+      Trade.from_influx_24h_volume(market: @market_id).yield_self do |t|
+        if t.blank?
+          ZERO
+        else
+          t[:volume].to_d
+        end
+      end
     end
   end
 
@@ -85,12 +91,11 @@ class Global
   # For more info visit https://www.investopedia.com/terms/v/vwap.asp
   def avg_h24_price
     cache_fetch(:avg_h24_price) do
-      Trade.with_market(market_id).h24.yield_self do |t|
-        total_volume = t.sum(:amount)
-        if total_volume.zero?
+      Trade.from_influx_vwap(market: @market_id).yield_self do |t|
+        if t.blank? || t[:vwap].zero?
           ZERO
         else
-          t.sum('price * amount') / total_volume
+          t[:vwap].to_d
         end
       end
     end
