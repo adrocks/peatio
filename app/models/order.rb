@@ -80,6 +80,10 @@ class Order < ApplicationRecord
     self.taker_fee = trading_fee.taker
   end
 
+  before_create do
+    self.uuid = [ SecureRandom.uuid.delete('-') ].pack('H*')
+  end
+
   after_commit on: :create do
     next unless ord_type == 'limit'
     EventAPI.notify ['market', market_id, 'order_created'].join('.'), \
@@ -173,6 +177,12 @@ class Order < ApplicationRecord
   # @deprecated Please use {#created_at} instead
   def at
     created_at.to_i
+  end
+
+  def pretty_uuid
+    uuid.unpack('H*').first.tap do |str|
+      [20, 16, 12, 8].each { |pos| str.insert(pos, '-') }
+    end
   end
 
   def for_notify
@@ -295,12 +305,12 @@ class Order < ApplicationRecord
 end
 
 # == Schema Information
-# Schema version: 20200117160600
+# Schema version: 20200305140516
 #
 # Table name: orders
 #
 #  id             :integer          not null, primary key
-#  uuid           :binary(16)
+#  uuid           :binary(16)       not null
 #  bid            :string(10)       not null
 #  ask            :string(10)       not null
 #  market_id      :string(20)       not null

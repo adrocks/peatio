@@ -14,6 +14,16 @@ module API
         )
 
         expose(
+          :uuid,
+          documentation:{
+            type: String,
+            desc: "Unique order UUID."
+          }
+        ) do |order, _options|
+          order.pretty_uuid
+        end
+
+        expose(
           :side,
           documentation: {
             type: String,
